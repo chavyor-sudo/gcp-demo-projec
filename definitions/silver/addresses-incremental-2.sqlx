@@ -1,0 +1,28 @@
+config {
+  type: "incremental", // עדיין אינקרמנטלי (רק מוסיף שורות)
+  database: "chavysb",
+  dataset: "silver",
+  description: "Fast Insert-Only SCD Type 2 for addresses"
+}
+
+SELECT 
+  user_id,
+  city,
+  CURRENT_TIMESTAMP() as valid_from
+FROM ${ref("bronze", "addresses")}
+
+-- בריצות הבאות: מביא רק משתמשים שהעיר שלהם השתנתה בהשוואה לריצה הקודמת
+${when(incremental(), `
+  WHERE user_id NOT IN (
+    -- תת-שאילתה שמוודא שלא נכניס שוב את אותה העיר בדיוק
+    SELECT user_id 
+    FROM (
+      SELECT 
+        user_id, 
+        city,
+        ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY valid_from DESC) as rn
+      FROM ${self()}
+    )
+    WHERE rn = 1 AND city = city -- (כאן משווים לעיר מהברונז)
+  )
+`)}

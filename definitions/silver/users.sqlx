@@ -1,0 +1,12 @@
+config {
+  type: "table", 
+  database: "chavysb",
+  dataset: "silver", 
+  description: "Clean users table - Full Load"
+}
+
+SELECT 
+  user_id,
+  name,
+  email
+FROM ${ref("bronze", "users")} 

@@ -1,0 +1,16 @@
+config {
+  type: "table",
+  database: "chavysb",
+  dataset: "gold",
+  description: "Final Gold table - Joins users with current address using is_current flag"
+}
+
+SELECT 
+  u.user_id,
+  u.name,
+  u.email,
+  a.city
+FROM ${ref("silver", "users")} u
+LEFT JOIN ${ref("silver", "addresses-incremental")} a 
+  ON u.user_id = a.user_id 
+  AND a.is_current = TRUE 

@@ -1,0 +1,47 @@
+config {
+  type: "incremental",
+  database: "chavysb",
+  dataset: "silver",
+  description: "SCD Type 2 table for addresses - keeps history"
+}
+
+-- 1.firs run insert all data 
+SELECT 
+  user_id,
+  city,
+  CURRENT_TIMESTAMP() as valid_from,
+  TIMESTAMP('2999-12-31') as valid_to,
+  TRUE as is_current
+FROM ${ref("bronze", "addresses")}
+
+
+${when(incremental(), `
+  UNION ALL
+  
+  SELECT 
+    b.user_id,
+    b.city,
+    CURRENT_TIMESTAMP() as valid_from,
+    TIMESTAMP('2999-12-31') as valid_to,
+    TRUE as is_current
+  FROM ${ref("bronze", "addresses")} b
+  JOIN ${self()} s 
+    ON b.user_id = s.user_id AND s.is_current = TRUE
+  WHERE b.city != s.city
+`)}
+
+post_operations {
+  ${when(incremental(), `
+    UPDATE ${self()} s
+    SET 
+      valid_to = CURRENT_TIMESTAMP(),
+      is_current = FALSE
+    WHERE s.is_current = TRUE
+      AND s.user_id IN (
+        SELECT user_id 
+        FROM ${ref("bronze", "addresses")} b 
+        WHERE b.city != s.city
+      )
+      AND s.valid_from < CURRENT_TIMESTAMP();
+  `)}
+}
