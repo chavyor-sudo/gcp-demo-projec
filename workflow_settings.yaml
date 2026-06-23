@@ -1,4 +1,5 @@
 defaultProject: chavysb
 defaultDataset: dataform
+defaultLocation: us-east1
 defaultAssertionDataset: dataform_assertions
 dataformCoreVersion: 3.0.52
