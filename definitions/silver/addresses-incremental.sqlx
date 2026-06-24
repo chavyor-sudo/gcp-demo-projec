@@ -2,10 +2,10 @@ config {
   type: "incremental",
   database: "chavysb",
   dataset: "silver",
-  description: "SCD Type 2 table for addresses - keeps history"
+  description: "SCD Type 2 addresses - fixed incremental duplicates"
 }
 
--- 1. בריצה הראשונה (או ב-Full Refresh) מכניסים את כל הקובץ כ-true
+-- 1. בריצה הראשונה (Full Refresh) - לוקחים הכל מהברונז
 ${when(!incremental(), `
   SELECT 
     user_id,
@@ -16,8 +16,7 @@ ${when(!incremental(), `
   FROM ${ref("bronze", "addresses")}
 `)}
 
--- 2. בריצות הבאות (אינקרמנטלי) מכניסים בצורה פשוטה וישירה את כל מה שיש בבקט כ-TRUE
--- אין פה שום JOIN, לכן השאילתה הזו בחיים לא תיכשל בזמן הריצה!
+-- 2. בריצות הבאות (אינקרמנטלי) - התיקון המרכזי למניעת כפילויות!
 ${when(incremental(), `
   SELECT 
     b.user_id,
@@ -26,6 +25,13 @@ ${when(incremental(), `
     TIMESTAMP('2999-12-31') as valid_to,
     TRUE as is_current
   FROM ${ref("bronze", "addresses")} b
+  -- חיבור לסילבר הקיים כדי לבדוק מה המצב האקטיבי הנוכחי
+  LEFT JOIN ${self()} s 
+    ON b.user_id = s.user_id AND s.is_current = TRUE
+  -- מסננים החוצה קבצי היסטוריה
+  WHERE NOT REGEXP_CONTAINS(b._FILE_NAME, r'addresses_\d{8}_\d{6}\.csv')
+    -- תנאי קריטי: מכניסים רק אם המשתמש חדש (NULL) או שהעיר שלו השתנתה בקובץ החדש!
+    AND (s.user_id IS NULL OR b.city != s.city)
 `)}
 
 -- 3. עדכון וסגירת השורות הישנות בסילבר
@@ -36,15 +42,16 @@ post_operations {
       valid_to = CURRENT_TIMESTAMP(),
       is_current = FALSE
     WHERE s.is_current = TRUE
-      -- הגנה: מעדכנים רק שורות שהיו קיימות בסילבר לפני הריצה הנוכחית (יותר מ-5 שניות)
-      -- זה מונע מה-UPDATE לגעת בטעות בשורות החדשות שזה עתה הכנסנו בשלב 2
+      -- מעדכנים רק שורות שהיו קיימות לפני הריצה הנוכחית
       AND s.valid_from < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 5 SECOND)
       
-      -- סוגרים את הרשומה הישנה רק אם הגיע עבור ה-user_id הזה מידע חדש בברונז
+      -- סוגרים את הרשומה הישנה רק אם הגיע עבור המשתמש מידע חדש עם עיר שונה בקובץ הנוכחי
       AND EXISTS (
         SELECT 1 
         FROM ${ref("bronze", "addresses")} b 
-        WHERE b.user_id = s.user_id
+        WHERE b.user_id = s.user_id 
+          AND b.city != s.city
+          AND NOT REGEXP_CONTAINS(b._FILE_NAME, r'addresses_\d{8}_\d{6}\.csv')
       );
   `)}
 }

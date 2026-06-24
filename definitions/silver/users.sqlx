@@ -2,7 +2,11 @@ config {
   type: "table", 
   database: "chavysb",
   dataset: "silver", 
-  description: "Clean users table - Full Load"
+  description: "Clean users table - Full Load",
+  assertions: {
+    uniqueKey: ["user_id"],    
+    nonNull: ["user_id","name", "email"]
+  }
 }
 
 SELECT 
