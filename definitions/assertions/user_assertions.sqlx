@@ -1,0 +1,10 @@
+config { 
+  type: "assertion" 
+}
+
+-- הבדיקה תיכשל אם השילוב של התנאים יחזיר לפחות שורה אחת פגומה
+SELECT
+  user_id,
+  email
+FROM ${ref("silver", "users")}
+WHERE email NOT LIKE '%@%' OR email NOT LIKE '%.%'
