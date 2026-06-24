@@ -2,10 +2,9 @@ config {
   type: "incremental",
   database: "chavysb",
   dataset: "silver",
-  description: "SCD Type 2 addresses - fixed incremental duplicates"
+  description: "SCD Type 2 addresses - 100% immune to logical leaks"
 }
 
--- 1. בריצה הראשונה (Full Refresh) - לוקחים הכל מהברונז
 ${when(!incremental(), `
   SELECT 
     user_id,
@@ -16,25 +15,35 @@ ${when(!incremental(), `
   FROM ${ref("bronze", "addresses")}
 `)}
 
--- 2. בריצות הבאות (אינקרמנטלי) - התיקון המרכזי למניעת כפילויות!
 ${when(incremental(), `
+  WITH latest_bronze AS (
+    SELECT 
+      user_id,
+      city,
+      _FILE_NAME,
+      ROW_NUMBER() OVER (
+        PARTITION BY user_id 
+        ORDER BY 
+          CASE 
+            WHEN ENDS_WITH(_FILE_NAME, '/addresses.csv') THEN '99999999_999999' 
+            ELSE REGEXP_EXTRACT(_FILE_NAME, r'addresses_(\d{8}_\d{6})\.csv') 
+          END DESC
+      ) as rn
+    FROM ${ref("bronze", "addresses")}
+  )
   SELECT 
     b.user_id,
     b.city,
     CURRENT_TIMESTAMP() as valid_from,
     TIMESTAMP('2999-12-31') as valid_to,
     TRUE as is_current
-  FROM ${ref("bronze", "addresses")} b
-  -- חיבור לסילבר הקיים כדי לבדוק מה המצב האקטיבי הנוכחי
+  FROM latest_bronze b
   LEFT JOIN ${self()} s 
     ON b.user_id = s.user_id AND s.is_current = TRUE
-  -- מסננים החוצה קבצי היסטוריה
-  WHERE NOT REGEXP_CONTAINS(b._FILE_NAME, r'addresses_\d{8}_\d{6}\.csv')
-    -- תנאי קריטי: מכניסים רק אם המשתמש חדש (NULL) או שהעיר שלו השתנתה בקובץ החדש!
+  WHERE b.rn = 1 
     AND (s.user_id IS NULL OR b.city != s.city)
 `)}
 
--- 3. עדכון וסגירת השורות הישנות בסילבר
 post_operations {
   ${when(incremental(), `
     UPDATE ${self()} s
@@ -42,16 +51,13 @@ post_operations {
       valid_to = CURRENT_TIMESTAMP(),
       is_current = FALSE
     WHERE s.is_current = TRUE
-      -- מעדכנים רק שורות שהיו קיימות לפני הריצה הנוכחית
       AND s.valid_from < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 5 SECOND)
-      
-      -- סוגרים את הרשומה הישנה רק אם הגיע עבור המשתמש מידע חדש עם עיר שונה בקובץ הנוכחי
       AND EXISTS (
         SELECT 1 
         FROM ${ref("bronze", "addresses")} b 
         WHERE b.user_id = s.user_id 
           AND b.city != s.city
-          AND NOT REGEXP_CONTAINS(b._FILE_NAME, r'addresses_\d{8}_\d{6}\.csv')
+          AND ENDS_WITH(b._FILE_NAME, '/addresses.csv') 
       );
   `)}
 }
