@@ -5,19 +5,20 @@ config {
   description: "SCD Type 2 table for addresses - keeps history"
 }
 
--- 1.firs run insert all data 
-SELECT 
-  user_id,
-  city,
-  CURRENT_TIMESTAMP() as valid_from,
-  TIMESTAMP('2999-12-31') as valid_to,
-  TRUE as is_current
-FROM ${ref("bronze", "addresses")}
+-- 1. בריצה הראשונה (או ב-Full Refresh) מכניסים את כל הקובץ כ-true
+${when(!incremental(), `
+  SELECT 
+    user_id,
+    city,
+    CURRENT_TIMESTAMP() as valid_from,
+    TIMESTAMP('2999-12-31') as valid_to,
+    TRUE as is_current
+  FROM ${ref("bronze", "addresses")}
+`)}
 
-
+-- 2. בריצות הבאות (אינקרמנטלי) מכניסים ישירות את כל מה שיש בקובץ בברונז כ-TRUE!
+-- (הרי הסכמנו שבקובץ יש רק שורות חדשות או מעודכנות שחובה להכניס)
 ${when(incremental(), `
-  UNION ALL
-  
   SELECT 
     b.user_id,
     b.city,
@@ -25,23 +26,24 @@ ${when(incremental(), `
     TIMESTAMP('2999-12-31') as valid_to,
     TRUE as is_current
   FROM ${ref("bronze", "addresses")} b
-  JOIN ${self()} s 
-    ON b.user_id = s.user_id AND s.is_current = TRUE
-  WHERE b.city != s.city
 `)}
 
+-- 3. עדכון וסגירת השורות הישנות בסילבר
 post_operations {
   ${when(incremental(), `
+    -- שלב א': סגירת הרשומות הישנות שהיו TRUE והפכתן ל-FALSE
     UPDATE ${self()} s
     SET 
       valid_to = CURRENT_TIMESTAMP(),
       is_current = FALSE
     WHERE s.is_current = TRUE
-      AND s.user_id IN (
-        SELECT user_id 
+      -- אנחנו סוגרים רק רשומות שהיו קיימות בטבלה לפני שהרצנו את ה-SELECT הנוכחי
+      -- הדרך הכי בטוחה היא לבדוק שהעיר בסילבר שונה מהעיר שהגיעה עכשיו בברונז
+      AND EXISTS (
+        SELECT 1 
         FROM ${ref("bronze", "addresses")} b 
-        WHERE b.city != s.city
-      )
-      AND s.valid_from < CURRENT_TIMESTAMP();
+        WHERE b.user_id = s.user_id 
+          AND b.city != s.city
+      );
   `)}
 }
